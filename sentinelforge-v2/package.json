@@ -1,0 +1,15 @@
+{
+  "name": "sentinelforge-v2",
+  "version": "2.0.0",
+  "description": "AI-powered polyglot code security pipeline — Microsoft Build AI Hackathon",
+  "scripts": {
+    "dev": "concurrently --names \"BACKEND,FRONTEND\" --prefix-colors \"blue,green\" \"npm run backend\" \"npm run frontend\"",
+    "backend": "cd backend && D:\\Adarsh\\sentinelforge-ai\\env\\Scripts\\python.exe -u -m uvicorn app.main:app --reload --port 8000",
+    "frontend": "cd frontend && npm run dev",
+    "install:all": "npm install && cd frontend && npm install",
+    "setup": "npm run install:all"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
