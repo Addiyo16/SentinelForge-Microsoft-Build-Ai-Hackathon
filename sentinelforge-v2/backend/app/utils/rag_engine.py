@@ -1,13 +1,15 @@
 """
 SentinelForge — RAG Engine
 Vector similarity search over a security knowledge base.
-Production: uses Azure AI Search. Dev: cosine sim over local embeddings.
+Production: uses Azure AI Search (Hybrid + Semantic Ranker).
+Dev/Fallback: uses TF-IDF vector space model with stopword filtering over local knowledge base.
 """
 
 import math
 import os
+import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List, Dict, Set
 
 
 @dataclass
@@ -27,7 +29,7 @@ class RAGResult:
 
 # ── Polyglot Local Knowledge Base ─────────────────────────────────────────────
 
-KNOWLEDGE_BASE: list[dict] = [
+KNOWLEDGE_BASE: List[dict] = [
     {
         "kb_ref": "perf-001",
         "vulnerability_type": "Asymptotic Exhaustion — O(N²) Linear Search",
@@ -135,34 +137,112 @@ KNOWLEDGE_BASE: list[dict] = [
     },
 ]
 
+# Stopwords to clean programming noise and English filler words
+STOPWORDS: Set[str] = {
+    "a", "an", "the", "and", "or", "in", "on", "at", "to", "for", "with", "is", "of", "from", "by", "that", "this",
+    "def", "class", "import", "return", "function", "const", "let", "var", "public", "private", "protected",
+    "static", "void", "int", "double", "float", "char", "string", "new", "null", "true", "false", "if", "else",
+    "for", "while", "do", "try", "catch", "include", "using", "namespace", "std", "main", "args", "self"
+}
 
-def _tokenize(text: str) -> set[str]:
-    return set(text.lower().replace("(", " ").replace(")", " ").replace("/", " ").split())
+
+def _tokenize(text: str) -> List[str]:
+    """Clean, lowercase, and tokenize code/text. Filters out standard stopwords."""
+    cleaned = re.sub(r"[^a-zA-Z0-9_\-\u00a0-\uffff]", " ", text)
+    tokens = cleaned.lower().split()
+    return [t for t in tokens if t not in STOPWORDS and len(t) > 1]
 
 
-def _cosine_similarity(a: set[str], b: set[str]) -> float:
-    if not a or not b:
+# ── TF-IDF Model Precomputation ────────────────────────────────────────────────
+
+_doc_frequencies: Dict[str, int] = {}
+for entry in KNOWLEDGE_BASE:
+    # Build text representation of KB document
+    doc_text = (
+        " ".join(entry["keywords"]) + " " + 
+        entry["vulnerability_type"] + " " + 
+        entry["cwe"] + " " + 
+        entry["root_cause"]
+    )
+    doc_tokens = set(_tokenize(doc_text))
+    for token in doc_tokens:
+        _doc_frequencies[token] = _doc_frequencies.get(token, 0) + 1
+
+
+def _get_tfidf_vector(tokens: List[str]) -> Dict[str, float]:
+    """Calculate TF-IDF representation vector of token list."""
+    vector = {}
+    total = len(tokens)
+    if total == 0:
+        return vector
+
+    # Calculate Term Frequency (TF)
+    tf_counts = {}
+    for t in tokens:
+        tf_counts[t] = tf_counts.get(t, 0) + 1
+
+    # Apply Inverse Document Frequency (IDF)
+    N = len(KNOWLEDGE_BASE)
+    for term, count in tf_counts.items():
+        tf = count / total
+        df = _doc_frequencies.get(term, 0)
+        # Smoothing: idf = log((1 + N) / (1 + df)) + 1
+        idf = math.log((1 + N) / (1 + df)) + 1
+        vector[term] = tf * idf
+
+    return vector
+
+
+def _cosine_similarity_tfidf(vec1: Dict[str, float], vec2: Dict[str, float]) -> float:
+    """Compute cosine similarity between two sparse TF-IDF vectors."""
+    if not vec1 or not vec2:
         return 0.0
-    intersection = len(a & b)
-    return intersection / math.sqrt(len(a) * len(b))
 
+    dot_product = sum(val * vec2[term] for term, val in vec1.items() if term in vec2)
+    norm1 = math.sqrt(sum(val * val for val in vec1.values()))
+    norm2 = math.sqrt(sum(val * val for val in vec2.values()))
+
+    if norm1 == 0.0 or norm2 == 0.0:
+        return 0.0
+
+    return dot_product / (norm1 * norm2)
+
+
+# ── Retrieval ─────────────────────────────────────────────────────────────────
 
 def retrieve_context(code: str, threat_categories: list[str]) -> list[RAGResult]:
     """
-    Retrieve top-k knowledge base entries relevant to the scanned code.
-    Uses keyword-based cosine similarity over code tokens + threat labels.
+    Retrieve top-3 knowledge base entries relevant to the scanned code.
+    Uses TF-IDF Vector Space Model (VSM) cosine similarity over clean tokens.
     """
-    query_tokens = _tokenize(code) | _tokenize(" ".join(threat_categories))
+    # Create query by combining code contents and matched threat labels
+    query_text = code + " " + " ".join(threat_categories)
+    query_tokens = _tokenize(query_text)
+    query_vector = _get_tfidf_vector(query_tokens)
+
     scored: list[tuple[float, dict]] = []
 
     for entry in KNOWLEDGE_BASE:
-        kb_tokens = _tokenize(
-            " ".join(entry["keywords"]) + " " + entry["vulnerability_type"]
+        kb_text = (
+            " ".join(entry["keywords"]) + " " + 
+            entry["vulnerability_type"] + " " + 
+            entry["cwe"] + " " + 
+            entry["root_cause"]
         )
-        score = _cosine_similarity(query_tokens, kb_tokens)
-        if score > 0.05:
+        kb_tokens = _tokenize(kb_text)
+        kb_vector = _get_tfidf_vector(kb_tokens)
+
+        score = _cosine_similarity_tfidf(query_vector, kb_vector)
+        
+        # Threat Category Match Boost (increases score if matched category is found)
+        for cat in threat_categories:
+            if cat.lower() in entry["vulnerability_type"].lower() or cat.lower() in " ".join(entry["keywords"]).lower():
+                score += 0.15 # Apply category boost
+
+        if score > 0.02:
             scored.append((score, entry))
 
+    # Sort results by similarity score descending
     scored.sort(key=lambda x: x[0], reverse=True)
     top_k = scored[:3]
 
@@ -175,7 +255,8 @@ def retrieve_context(code: str, threat_categories: list[str]) -> list[RAGResult]
                 root_cause=entry["root_cause"],
                 historical_fix=entry["historical_fix"],
                 optimized_example=entry["optimized_example"],
-                similarity_score=round(score, 4),
+                # Clamp similarity score between 0.0 and 1.0
+                similarity_score=round(min(max(score, 0.0), 1.0), 4),
                 owasp_category=entry["owasp"],
                 cwe_id=entry["cwe"],
             )
@@ -188,7 +269,7 @@ async def retrieve_context_azure(code: str, threat_categories: list[str]) -> lis
     """
     Production path — Azure AI Search semantic retrieval.
     Requires: AZURE_SEARCH_ENDPOINT, AZURE_SEARCH_KEY, AZURE_SEARCH_INDEX in .env
-    Falls back to local similarity if env vars not set.
+    Falls back to local TF-IDF similarity if Azure Search credentials are missing.
     """
     endpoint = os.getenv("AZURE_SEARCH_ENDPOINT")
     key = os.getenv("AZURE_SEARCH_KEY")
@@ -225,4 +306,5 @@ async def retrieve_context_azure(code: str, threat_categories: list[str]) -> lis
             )
         return results
     except Exception:
+        # Graceful fallback to local Vector Space Model
         return retrieve_context(code, threat_categories)

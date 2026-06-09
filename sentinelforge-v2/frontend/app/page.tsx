@@ -12,7 +12,7 @@ interface ASTFinding { node_type: string; description: string; line: number; col
 interface ASTReport { cyclomatic_complexity: number; max_loop_depth: number; function_count: number; class_count: number; dangerous_calls: string[]; findings: ASTFinding[]; optimized_snippet?: string; original_snippet?: string; }
 interface RAGResult { kb_ref: string; vulnerability_type: string; root_cause: string; historical_fix: string; optimized_example: string; similarity_score: number; owasp_category: string; cwe_id: string; }
 interface AgentMsg { agent: string; role: string; content: string; timestamp: number; }
-interface SwarmResult { dialogue: AgentMsg[]; final_patch: string; pr_description: string; risk_score: number; approved: boolean; }
+interface SwarmResult { dialogue: AgentMsg[]; final_patch: string; pr_description: string; risk_score: number; patched_risk_score: number; approved: boolean; }
 interface StageInfo { status: string; detail: string; ts: number; }
 interface PipelineState {
   status: string; run_id: string | null; repo: string | null; commit_sha: string | null;
@@ -20,6 +20,7 @@ interface PipelineState {
   logs: Log[]; trie_findings: TrieFinding[]; ast_report: ASTReport; rag_context: RAGResult[];
   swarm_result: SwarmResult; ci_status: Record<string, unknown>; dag_topology: unknown[];
   pr_url: string | null; pr_body?: string; started_at: number | null; finished_at: number | null;
+  platform: string | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -327,8 +328,9 @@ function AgentTab({ swarm, originalCode }: { swarm: SwarmResult | undefined; ori
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <MetricCard label="Risk Score" value={`${swarm.risk_score}/100`} accent={swarm.risk_score > 70 ? "#ef4444" : swarm.risk_score > 40 ? "#f97316" : "#22c55e"} />
-        <MetricCard label="Decision" value={swarm.approved ? "APPROVE" : "CHANGES"} accent={swarm.approved ? "#22c55e" : "#f97316"} />
+        <MetricCard label="Original Risk" value={swarm.risk_score != null ? `${swarm.risk_score}/100` : "—"} accent={swarm.risk_score > 70 ? "#ef4444" : swarm.risk_score > 40 ? "#f97316" : "#22c55e"} />
+        <MetricCard label="Mitigated Risk" value={swarm.patched_risk_score != null ? `${swarm.patched_risk_score}/100` : "—"} accent={swarm.patched_risk_score > 70 ? "#ef4444" : swarm.patched_risk_score > 40 ? "#f97316" : "#22c55e"} />
+        <MetricCard label="Decision" value={swarm.approved ? "APPROVE" : "REQUEST CHANGES"} accent={swarm.approved ? "#22c55e" : "#ef4444"} />
         <MetricCard label="Agents" value={swarm.dialogue.length} sub="messages" />
       </div>
 
@@ -389,26 +391,28 @@ function AgentTab({ swarm, originalCode }: { swarm: SwarmResult | undefined; ori
 }
 
 function PRTab({ state }: { state: PipelineState }) {
-  const { pr_url, pr_body } = state;
+  const { pr_url, pr_body, platform } = state;
+  const platformName = platform === "gitlab" ? "GitLab" : platform === "azure-devops" ? "Azure DevOps" : "GitHub";
+  const prLabel = platform === "gitlab" ? "Merge Request" : "Pull Request";
 
-  if (!pr_body && !pr_url) return <EmptyState icon="📝" text="PR report will appear here after the pipeline completes." />;
+  if (!pr_body && !pr_url) return <EmptyState icon="📝" text="PR/MR report will appear here after the pipeline completes." />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {pr_url && (
         <div style={{ background: "#22c55e15", border: "1px solid #22c55e44", borderRadius: 8, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontSize: 14, color: "#22c55e" }}>✅ Pull Request created successfully</span>
+          <span style={{ fontSize: 14, color: "#22c55e" }}>✅ {platformName} {prLabel} created successfully</span>
           <a href={pr_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#3b82f6" }}>{pr_url}</a>
         </div>
       )}
       {!pr_url && (
         <div style={{ background: "#f59e0b15", border: "1px solid #f59e0b44", borderRadius: 8, padding: "12px 16px" }}>
-          <span style={{ fontSize: 13, color: "#f59e0b" }}>⚠️ Set GITHUB_TOKEN in .env to auto-create real PRs. PR body preview below.</span>
+          <span style={{ fontSize: 13, color: "#f59e0b" }}>⚠️ Set {platform === "gitlab" ? "GITLAB_TOKEN" : platform === "azure-devops" ? "AZURE_DEVOPS_TOKEN" : "GITHUB_TOKEN"} in .env to auto-create real {prLabel}s. {prLabel} body preview below.</span>
         </div>
       )}
       {pr_body && (
         <Card>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>PR Markdown Preview</div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>{prLabel} Markdown Preview</div>
           <pre style={{ margin: 0, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.7, background: "var(--terminal-bg)", padding: 14, borderRadius: 6, overflow: "auto", maxHeight: 600, whiteSpace: "pre-wrap" }}>
             {pr_body}
           </pre>
@@ -524,6 +528,7 @@ export default function SentinelForgeDashboard() {
   const [showInput, setShowInput] = useState(false);
   const [repo, setRepo] = useState("my-org/my-project");
   const [filename, setFilename] = useState("solution.py");
+  const [platform, setPlatform] = useState("github");
   const [code, setCode] = useState(`# Paste your code here (Python, JS, Java, C++, YAML, etc.)
 def two_sum(nums, target):
     for i in range(len(nums)):
@@ -539,7 +544,7 @@ def two_sum(nums, target):
       await fetch(`${API}/api/analyze-custom`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo, filename, code }),
+        body: JSON.stringify({ repo, filename, code, platform }),
       });
       setTab("logs");
     } catch {
@@ -579,7 +584,7 @@ def two_sum(nums, target):
     { id: "ast", label: "AST Analysis", count: state?.ast_report?.findings?.length },
     { id: "rag", label: "RAG Context", count: state?.rag_context?.length },
     { id: "agents", label: "Agent Swarm", count: state?.swarm_result?.dialogue?.length },
-    { id: "pr", label: "PR Report", count: state?.pr_url ? 1 : 0 },
+    { id: "pr", label: state?.platform === "gitlab" ? "MR Report" : "PR Report", count: state?.pr_url ? 1 : 0 },
     { id: "architecture", label: "Azure Topology" },
   ];
 
@@ -651,7 +656,8 @@ def two_sum(nums, target):
 
               {/* Run info */}
               {state?.repo && (
-                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span>{state.platform === "gitlab" ? "🦊" : state.platform === "azure-devops" ? "☁️" : "🐙"}</span>
                   <span style={{ color: "#3b82f6" }}>{state.repo}</span>
                   {state.commit_sha && <span> · {state.commit_sha.slice(0, 8)}</span>}
                 </div>
@@ -716,6 +722,18 @@ def two_sum(nums, target):
                     style={{ width: "100%", padding: "9px 12px", background: "#161b22", border: "1px solid #30363d", borderRadius: 7, color: "#e6edf3", fontSize: 13, outline: "none" }}
                   />
                 </div>
+                <div style={{ flex: 1, minWidth: 160 }}>
+                  <div style={{ fontSize: 11, color: "#484f58", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>CI Platform</div>
+                  <select
+                    value={platform}
+                    onChange={e => setPlatform(e.target.value)}
+                    style={{ width: "100%", padding: "9px 12px", background: "#161b22", border: "1px solid #30363d", borderRadius: 7, color: "#e6edf3", fontSize: 13, outline: "none" }}
+                  >
+                    <option value="github">GitHub</option>
+                    <option value="gitlab">GitLab</option>
+                    <option value="azure-devops">Azure DevOps</option>
+                  </select>
+                </div>
               </div>
               <div style={{ fontSize: 11, color: "#484f58", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>Paste Your Code</div>
               <textarea
@@ -754,8 +772,8 @@ def two_sum(nums, target):
                 {[
                   { label: "Threats", value: state?.trie_findings?.length ?? 0, color: state?.trie_findings?.length ? "#ef4444" : "#22c55e" },
                   { label: "AST Issues", value: state?.ast_report?.findings?.length ?? 0, color: state?.ast_report?.findings?.length ? "#f97316" : "#22c55e" },
-                  { label: "RAG Hits", value: state?.rag_context?.length ?? 0, color: "#8b5cf6" },
-                  { label: "Risk", value: state?.swarm_result?.risk_score != null ? `${state.swarm_result.risk_score}/100` : "—", color: (state?.swarm_result?.risk_score ?? 0) > 70 ? "#ef4444" : "#22c55e" },
+                  { label: "Original Risk", value: state?.swarm_result?.risk_score != null ? `${state.swarm_result.risk_score}/100` : "—", color: (state?.swarm_result?.risk_score ?? 0) > 40 ? "#ef4444" : "#22c55e" },
+                  { label: "Mitigated Risk", value: state?.swarm_result?.patched_risk_score != null ? `${state.swarm_result.patched_risk_score}/100` : "—", color: (state?.swarm_result?.patched_risk_score ?? 0) > 40 ? "#ef4444" : "#22c55e" },
                 ].map(m => (
                   <div key={m.label} style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{m.label}</div>

@@ -1,6 +1,7 @@
 """
 SentinelForge v2 — FastAPI Main Application
 Full 8-stage async pipeline: ingest → trie → AST → RAG → sandbox → auditor‖optimizer → CI check → PR
+Supports multiple CI/CD platforms: GitHub, GitLab, Azure DevOps.
 """
 
 import asyncio
@@ -17,6 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.agents.swarm import run_swarm
+from app.services.service_factory import get_ci_service
+# Backwards compatible imports
 from app.services.github_service import (
     create_pull_request,
     fetch_changed_files,
@@ -56,6 +59,7 @@ _pipeline_state: dict[str, Any] = {
     "pr_body": None,
     "started_at": None,
     "finished_at": None,
+    "platform": "github",
 }
 
 _trie = ThreatTrie()
@@ -89,6 +93,7 @@ async def run_full_pipeline(
     files: list[dict],
     pusher: str = "unknown",
     branch: str = "main",
+    platform: str = "github",
 ):
     global _pipeline_state
 
@@ -113,12 +118,16 @@ async def run_full_pipeline(
         "pr_body": None,
         "started_at": time.time(),
         "finished_at": None,
+        "platform": platform,
     })
 
     try:
+        # Resolve platform service
+        ci_service = get_ci_service(platform)
+
         # ── Stage 1: Ingest ───────────────────────────────────────────────────
         _set_stage("ingest", "running")
-        _log(f"📥 Ingesting {len(files)} file(s) from {repo}@{commit_sha[:8]}")
+        _log(f"📥 Ingesting {len(files)} file(s) from {platform.upper()} · {repo}@{commit_sha[:8]}")
         await asyncio.sleep(0.3)
         combined_code = "\n\n".join(
             f"// === {f['filename']} ===\n{f['content']}" for f in files
@@ -220,22 +229,22 @@ async def run_full_pipeline(
 
         # ── Stage 7: CI Status ────────────────────────────────────────────────
         _set_stage("ci_check", "running")
-        _log("🔄 Checking GitHub Actions CI status…")
-        ci = await get_ci_status(repo, commit_sha)
+        _log(f"🔄 Checking {platform.upper()} CI pipeline status…")
+        ci = await ci_service.get_ci_status(repo, commit_sha)
         _pipeline_state["ci_status"] = ci
         _set_stage("ci_check", "complete", ci.get("summary", "unknown"))
         _log(f"✅ CI status — {ci.get('summary', 'no checks found')}")
 
         # ── Stage 8: Auto PR ──────────────────────────────────────────────────
         _set_stage("report", "running")
-        _log("📝 Generating PR report…")
+        _log(f"📝 Generating {platform.upper()} patch integration PR/MR…")
         pr_title = f"[SentinelForge] Auto-patch · {commit_sha[:8]} · Risk {swarm_result.risk_score}/100"
         pr_body = _build_pr_body(
             repo, commit_sha, files, trie_dicts, ast_report_combined or {},
-            rag_dicts, swarm_result, ci
+            rag_dicts, swarm_result, ci, platform
         )
 
-        pr_url = await create_pull_request(
+        pr_url = await ci_service.create_pull_request(
             repo=repo,
             base_branch=branch,
             head_branch=f"sentinelforge/patch-{commit_sha[:8]}",
@@ -244,8 +253,10 @@ async def run_full_pipeline(
         )
         _pipeline_state["pr_url"] = pr_url
         _pipeline_state["pr_body"] = pr_body
-        _set_stage("report", "complete", pr_url or "PR body generated (no token)")
-        _log(f"✅ PR {'created: ' + pr_url if pr_url else 'body ready (set GITHUB_TOKEN to auto-create)'}")
+        
+        pr_type_label = "Merge Request" if platform == "gitlab" else "Pull Request"
+        _set_stage("report", "complete", pr_url or f"{pr_type_label} body generated (no token)")
+        _log(f"✅ {pr_type_label} {'created: ' + pr_url if pr_url else 'body ready (set token to auto-create)'}")
 
         _pipeline_state["status"] = "complete"
         _pipeline_state["finished_at"] = time.time()
@@ -276,8 +287,9 @@ async def run_full_pipeline(
 
 
 def _build_pr_body(
-    repo, sha, files, threats, ast_report, rag_context, swarm_result, ci
+    repo, sha, files, threats, ast_report, rag_context, swarm_result, ci, platform: str = "github"
 ) -> str:
+    pr_name = "Merge Request" if platform == "gitlab" else "Pull Request"
     decision_badge = "✅ APPROVED" if swarm_result.approved else "⚠️ CHANGES REQUESTED"
     risk = swarm_result.risk_score
     risk_color = "🟢" if risk < 30 else "🟡" if risk < 70 else "🔴"
@@ -298,9 +310,11 @@ def _build_pr_body(
         for cr in ci.get("check_runs", [])
     ) or "_No CI checks found._"
 
+    provider_url = "https://gitlab.com" if platform == "gitlab" else "https://dev.azure.com" if platform == "azure-devops" else "https://github.com"
+
     return f"""# 🛡️ SentinelForge Auto-Patch Report
 
-> **Commit:** `{sha[:12]}` · **Repo:** `{repo}` · **Decision:** {decision_badge}
+> **Commit:** `{sha[:12]}` · **Repo:** `{repo}` · **Decision:** {decision_badge} · **Platform:** `{platform.upper()}`
 
 ## {risk_color} Risk Score: {risk}/100
 
@@ -325,14 +339,14 @@ def _build_pr_body(
 {swarm_result.final_patch}
 ```
 
-## 🔄 CI/CD Status
+## 🔄 CI/CD Status ({platform.upper()})
 {ci_section}
 
 ## 📋 Agent Review
 {swarm_result.pr_description}
 
 ---
-_Generated by [SentinelForge AI](https://github.com) · Microsoft Build AI Hackathon_
+_Generated by [SentinelForge AI]({provider_url}) · Microsoft Build AI Hackathon_
 """
 
 
@@ -401,6 +415,7 @@ async def simulate():
             files=mock_files,
             pusher="polyglot-user",
             branch="feature/multi-lang",
+            platform="github",
         )
     )
     return {"status": "started", "message": "Polyglot pipeline simulation launched"}
@@ -411,21 +426,19 @@ async def github_webhook(request: Request):
     """Real GitHub webhook endpoint. Wire this to your repo via ngrok."""
     body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
+    
+    service = get_ci_service("github")
 
-    if not verify_signature(body, signature):
+    if not service.verify_webhook(body, signature):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-    event_type = request.headers.get("X-GitHub-Event", "")
-    if event_type != "push":
-        return {"status": "ignored", "event": event_type}
-
     payload = json.loads(body)
-    event = parse_push_event(payload)
+    event = service.parse_push_event(payload)
 
-    _log(f"📨 Push event from {event.pusher} on {event.repo_full_name}@{event.branch}")
+    _log(f"📨 Push event from {event.pusher} on GitHub · {event.repo_full_name}@{event.branch}")
 
     # Fetch real file content from GitHub
-    github_files = await fetch_changed_files(event, max_files=5)
+    github_files = await service.fetch_changed_files(event, max_files=5)
 
     if not github_files:
         return {"status": "skipped", "reason": "No supported source files changed"}
@@ -442,6 +455,7 @@ async def github_webhook(request: Request):
             files=files_payload,
             pusher=event.pusher,
             branch=event.branch,
+            platform="github",
         )
     )
 
@@ -453,6 +467,96 @@ async def github_webhook(request: Request):
     }
 
 
+@app.post("/webhook/gitlab")
+async def gitlab_webhook(request: Request):
+    """Real GitLab webhook endpoint."""
+    body = await request.body()
+    signature = request.headers.get("X-Gitlab-Token", "")
+    
+    service = get_ci_service("gitlab")
+
+    if not service.verify_webhook(body, signature):
+        raise HTTPException(status_code=401, detail="Invalid GitLab webhook token")
+
+    payload = json.loads(body)
+    event = service.parse_push_event(payload)
+
+    _log(f"📨 Push event from {event.pusher} on GitLab · {event.repo_full_name}@{event.branch}")
+
+    gitlab_files = await service.fetch_changed_files(event, max_files=5)
+
+    if not gitlab_files:
+        return {"status": "skipped", "reason": "No supported source files changed"}
+
+    files_payload = [
+        {"filename": f.filename, "content": f.content}
+        for f in gitlab_files
+    ]
+
+    asyncio.create_task(
+        run_full_pipeline(
+            repo=event.repo_full_name,
+            commit_sha=event.commit_sha,
+            files=files_payload,
+            pusher=event.pusher,
+            branch=event.branch,
+            platform="gitlab",
+        )
+    )
+
+    return {
+        "status": "processing",
+        "repo": event.repo_full_name,
+        "commit": event.commit_sha,
+        "files": [f.filename for f in gitlab_files],
+    }
+
+
+@app.post("/webhook/azure-devops")
+async def azure_devops_webhook(request: Request):
+    """Real Azure DevOps service hooks endpoint."""
+    body = await request.body()
+    signature = request.headers.get("Authorization", "")
+    
+    service = get_ci_service("azure-devops")
+
+    if not service.verify_webhook(body, signature):
+        raise HTTPException(status_code=401, detail="Invalid ADO service hook credentials")
+
+    payload = json.loads(body)
+    event = service.parse_push_event(payload)
+
+    _log(f"📨 Push event from {event.pusher} on Azure DevOps · {event.repo_full_name}@{event.branch}")
+
+    ado_files = await service.fetch_changed_files(event, max_files=5)
+
+    if not ado_files:
+        return {"status": "skipped", "reason": "No supported source files changed"}
+
+    files_payload = [
+        {"filename": f.filename, "content": f.content}
+        for f in ado_files
+    ]
+
+    asyncio.create_task(
+        run_full_pipeline(
+            repo=event.repo_full_name,
+            commit_sha=event.commit_sha,
+            files=files_payload,
+            pusher=event.pusher,
+            branch=event.branch,
+            platform="azure-devops",
+        )
+    )
+
+    return {
+        "status": "processing",
+        "repo": event.repo_full_name,
+        "commit": event.commit_sha,
+        "files": [f.filename for f in ado_files],
+    }
+
+
 @app.post("/api/analyze-custom")
 async def analyze_custom(request: Request):
     """Run full pipeline on user-provided code."""
@@ -460,6 +564,8 @@ async def analyze_custom(request: Request):
     repo = body.get("repo", "custom/submission")
     filename = body.get("filename", "code.py")
     code = body.get("code", "")
+    platform = body.get("platform", "github")
+    
     if not code.strip():
         raise HTTPException(status_code=400, detail="No code provided")
     files = [{"filename": filename, "content": code}]
@@ -472,6 +578,7 @@ async def analyze_custom(request: Request):
             files=files,
             pusher="recruiter-demo",
             branch="main",
+            platform=platform,
         )
     )
     return {"status": "started", "repo": repo, "filename": filename}

@@ -35,7 +35,8 @@ class SwarmResult:
     dialogue: list[AgentMessage]
     final_patch: str
     pr_description: str
-    risk_score: int  # 0–100
+    risk_score: int  # Original risk
+    patched_risk_score: int  # Patched risk
     approved: bool
 
     def to_dict(self) -> dict:
@@ -52,6 +53,7 @@ class SwarmResult:
             "final_patch": self.final_patch,
             "pr_description": self.pr_description,
             "risk_score": self.risk_score,
+            "patched_risk_score": self.patched_risk_score,
             "approved": self.approved,
         }
 
@@ -166,18 +168,19 @@ async def run_swarm(
         "You are PatchSynthesizer, the lead engineer reviewing code changes before merge. "
         "Given the security audit and the optimized code, produce:\n"
         "1. A final merged patch (the best version of the code)\n"
-        "2. A GitHub PR description in Markdown with sections: Summary, Changes, Risk Score (0-100), Recommendation\n"
-        "3. Whether you APPROVE or REQUEST_CHANGES\n\n"
+        "2. A GitHub PR description in Markdown with sections: Summary, Changes, Risk Score of the ORIGINAL unpatched code (0-100), Recommendation\n"
+        "3. Whether you APPROVE or REQUEST_CHANGES. If the ORIGINAL_RISK_SCORE is greater than 40, your decision MUST be REQUEST_CHANGES (blocking the vulnerable code from merge). Only APPROVE if the original code was already safe and optimized.\n\n"
         "Format your response EXACTLY as:\n"
         "PATCH:\n```<language>\n<code>\n```\n\n"
         "PR_DESCRIPTION:\n<markdown>\n\n"
-        "RISK_SCORE: <number 0-100>\n"
+        "ORIGINAL_RISK_SCORE: <number 0-100 representing the threat severity of the ORIGINAL code before patching>\n"
+        "PATCHED_RISK_SCORE: <number 0-100 representing the residual risk of the code AFTER applying your patch>\n"
         "DECISION: APPROVE or REQUEST_CHANGES"
     )
     synthesizer_prompt = (
-        f"Security Audit:\n{auditor_response}\n\n"
-        f"Optimized Code:\n{optimizer_response}\n\n"
-        "Produce the final patch, PR description, risk score, and decision."
+        f"Security Audit of Original Code:\n{auditor_response}\n\n"
+        f"Optimized Code Patch:\n{optimizer_response}\n\n"
+        "Produce the final patch, PR description, risk score of the original code, and decision."
     )
 
     synth_response = await _call_agent(
@@ -204,14 +207,16 @@ async def run_swarm(
         final_patch = optimizer_response
 
     pr_description = _extract_after(synth_response, "PR_DESCRIPTION:")    or synth_response
-    risk_score     = _extract_int(synth_response, "RISK_SCORE:")           or 50
+    original_risk  = _extract_int(synth_response, "ORIGINAL_RISK_SCORE:")   or _extract_int(synth_response, "RISK_SCORE:") or 50
+    patched_risk   = _extract_int(synth_response, "PATCHED_RISK_SCORE:")    or 15
     approved       = "APPROVE" in synth_response and "REQUEST_CHANGES" not in synth_response
 
     return SwarmResult(
         dialogue=dialogue,
         final_patch=final_patch,
         pr_description=pr_description,
-        risk_score=risk_score,
+        risk_score=original_risk,
+        patched_risk_score=patched_risk,
         approved=approved,
     )
 
