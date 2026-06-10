@@ -137,9 +137,10 @@ SentinelForge-Microsoft-Build-Ai-Hackathon/
 
 ---
 
-## 💡 Pitch Deck & Shortlist Strengths for Recruiters
+## 🛠️ Technical Highlights Summary
 
-*   **Design Patterns & Clean Code:** Built using a Factory Pattern for VCS/CI platforms and Scanner classes, showcasing solid OOP principles.
-*   **Algorithms & Data Structures:** Uses an Aho-Corasick Trie for $O(N)$ multi-pattern keyword matching and custom Directed Acyclic Graphs (DAG) for parallel task scheduling.
-*   **Enterprise Fallbacks:** Implements custom TF-IDF search for local RAG so the system runs smoothly even if cloud services go offline.
-*   **Multi-Agent Swarm Design:** Utilizes the AutoGen swarm protocol where agents cross-evaluate each other, reducing AI hallucinations.
+*   **Factory Pattern Architecture:** Pluggable design pattern for modular VCS and CI/CD platform integrations.
+*   **Scalable Threat Detection & Task Orchestration:** Leverages an Aho-Corasick Trie for $O(N)$ multi-pattern signature matching and Directed Acyclic Graphs (DAG) for parallel task scheduling.
+*   **Semantic Local Retrieval:** Implements custom TF-IDF-based local RAG retrieval with offline fallback support.
+*   **Agentic Orchestration:** Utilizes a multi-agent AutoGen workflow for collaborative security auditing and patch generation.
+
