@@ -42,6 +42,26 @@ Developer Push / PR Event
 
 ---
 
+## 🤖 AI & Machine Learning Technologies
+
+SentinelForge combines generative AI orchestration, vector space representation, and agentic consensus loops to construct a reliable code security remediation pipeline:
+
+### 1. Multi-Agent Collaboration & Swarm Intelligence
+To solve complex code auditing and patch generation, we implement a **Swarm Intelligence** model utilizing the AutoGen framework. We divide cognitive responsibilities among three specialized LLM agents (using `gpt-4o` and `gpt-4o-mini` via Azure GitHub Models):
+*   **SecurityAuditor (Probabilistic Vulnerability Scanning):** Audits code using targeted OWASP Top 10 prompts to identify CWE security flaws.
+*   **CodeOptimizer (Heuristic Code Refactoring):** Analyzes loop-nesting and AST indicators to optimize code structures.
+*   **PatchSynthesizer (Conflict Resolution):** Synthesizes conflicting auditor and optimizer feedback into a single secure patch. It performs a final verification check to enforce that code updates match original formatting.
+
+### 2. Semantic Retrieval-Augmented Generation (RAG)
+To prevent LLM hallucination and ensure industry-compliant patches, the pipeline injects context-specific coding standards into LLM prompts:
+*   **Vector Space Model (VSM) Fallback:** Built from scratch using classical NLP **TF-IDF (Term Frequency-Inverse Document Frequency)** calculations and **Cosine Similarity** to compute search indexing vectors over a local database.
+*   **Azure AI Search Integration:** Production route using dense vector embeddings (e.g., `text-embedding-3-small`) to resolve semantic proximity query mappings in Azure's cloud vector database.
+
+### 3. Hybrid AI Safety Guardrails
+By wrapping **probabilistic AI generation** (LLM Swarm) inside **deterministic computer science constructs** (AST analyzers, static Trie scans, and Sandbox test executions), the system guarantees that generated security patches are correct and compilation-ready before check-in.
+
+---
+
 ## 🌟 Key Engineering Highlights
 
 ### 1. Pluggable VCS & CI/CD Layer
