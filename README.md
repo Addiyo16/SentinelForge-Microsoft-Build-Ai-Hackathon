@@ -127,7 +127,7 @@ SentinelForge-Microsoft-Build-Ai-Hackathon/
 ### Execution
 1.  Navigate to the repository folder:
     ```powershell
-    cd "E:\Adarsh\project Microsoft\SentinelForge-Microsoft-Build-Ai-Hackathon"
+    cd path/to/SentinelForge-Microsoft-Build-Ai-Hackathon
     ```
 2.  Run the launcher batch script:
     ```powershell

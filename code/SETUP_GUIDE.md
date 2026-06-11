@@ -40,10 +40,10 @@ sentinelforge-ai/
 
 ### Create virtual environment
 ```powershell
-cd D:\Adarsh\sentinelforge-ai
-python -m venv env
+cd sentinelforge-v2
+python -m venv .venv
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-& D:\Adarsh\sentinelforge-ai\env\Scripts\Activate.ps1
+.venv\Scripts\Activate.ps1
 ```
 
 ### Install dependencies
@@ -66,8 +66,8 @@ GITHUB_WEBHOOK_SECRET=xxxx      ← optional, enables webhook verification
 
 ### Run backend
 ```powershell
-cd D:\Adarsh\sentinelforge-ai\backend
-& D:\Adarsh\sentinelforge-ai\env\Scripts\Activate.ps1
+cd backend
+.venv\Scripts\Activate.ps1
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
@@ -78,7 +78,8 @@ Verify: open http://localhost:8000/health → should return `{"status":"ok"}`
 ## 🎨 Step 2 — Frontend Setup
 
 ```powershell
-cd D:\Adarsh\sentinelforge-ai\frontend
+cd ../frontend
+npm install
 npm run dev
 ```
 
