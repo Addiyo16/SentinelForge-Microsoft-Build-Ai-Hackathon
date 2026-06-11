@@ -3,12 +3,15 @@ title SentinelForge Launcher
 echo Starting SentinelForge...
 
 :: Add portable Node to Path if it exists, otherwise fall back to system Node.js
-if exist "%~dp0..\node-portable\node-v22.11.0-win-x64" (
-    echo [INFO] Found portable Node.js. Adding to PATH...
-    set PATH=%~dp0..\node-portable\node-v22.11.0-win-x64;%PATH%
-) else (
-    echo [INFO] Portable Node.js not found. Using system Node.js...
-)
+if not exist "%~dp0..\node-portable\node-v22.11.0-win-x64" goto :use_system_node
+echo [INFO] Found portable Node.js. Adding to PATH...
+set "PATH=%~dp0..\node-portable\node-v22.11.0-win-x64;%PATH%"
+goto :continue_setup
+
+:use_system_node
+echo [INFO] Portable Node.js not found. Using system Node.js...
+
+:continue_setup
 
 :: Navigate to repository root directory
 cd /d "%~dp0"
