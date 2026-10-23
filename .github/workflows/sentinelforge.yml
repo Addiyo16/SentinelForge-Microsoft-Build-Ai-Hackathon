@@ -1,0 +1,74 @@
+name: "SentinelForge Security Gate & Auto-Patch"
+
+on:
+  pull_request:
+    branches: [ "main", "master", "develop" ]
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  statuses: write
+  checks: write
+
+jobs:
+  security-gate:
+    name: "sentinelforge/security-gate"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install SentinelForge Backend Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r sentinelforge-v2/backend/requirements.txt
+
+      - name: Execute SentinelForge Security Gate
+        id: gate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python -c "
+          import sys, asyncio
+          sys.path.insert(0, 'sentinelforge-v2/backend')
+          from app.main import run_full_pipeline, _pipeline_state
+          from app.core.risk import MergeDecision
+
+          async def main():
+              repo = '${{ github.repository }}'
+              sha = '${{ github.sha }}'
+              print(f'[SentinelForge] Auditing {repo} at commit {sha}...')
+              await run_full_pipeline(repo=repo, commit_sha=sha, file_limit=25)
+              res = _pipeline_state.get('risk_evaluation', {})
+              decision = res.get('merge_decision', 'CHANGES_REQUESTED')
+              orig = res.get('original_risk', 0)
+              resid = res.get('residual_risk', 0)
+              print(f'[SentinelForge] Final Decision: {decision}')
+              print(f'[SentinelForge] Risk: {orig}/100 -> Residual: {resid}/100')
+              if decision == 'APPROVED':
+                  print('✅ PR Merge Gate PASSED. Code approved for merging.')
+                  sys.exit(0)
+              else:
+                  print(f'🛑 PR Merge Gate {decision}. Blocking PR merge in GitHub.')
+                  sys.exit(1)
+
+          asyncio.run(main())
+          "
+
+      - name: Export SentinelForge Audit Report
+        if: always()
+        run: |
+          mkdir -p reports
+          cp -r sentinelforge-v2/backend/*.md reports/ 2>/dev/null || true

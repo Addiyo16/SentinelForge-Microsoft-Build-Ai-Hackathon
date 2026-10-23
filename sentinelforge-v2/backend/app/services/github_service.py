@@ -153,6 +153,46 @@ class GitHubService(BaseCIService):
                 return r.json().get("html_url")
             return None
 
+    async def create_commit_status(
+        self,
+        repo: str,
+        sha: str,
+        state: str,
+        description: str,
+        context: str = "sentinelforge/security-gate",
+        target_url: str = "",
+    ) -> bool:
+        """
+        Create a GitHub Commit Status check for a commit.
+        state must be one of: error | failure | pending | success.
+        This directly integrates with GitHub Branch Protection rules to enforce merge blocking.
+        """
+        token = get_secret("GITHUB_TOKEN")
+        if not token:
+            return False
+
+        payload = {
+            "state": state,
+            "description": description[:140],
+            "context": context,
+        }
+        if target_url:
+            payload["target_url"] = target_url
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(
+                    f"https://api.github.com/repos/{repo}/statuses/{sha}",
+                    headers={
+                        "Authorization": f"token {token}",
+                        "Accept": "application/vnd.github.v3+json",
+                    },
+                    json=payload,
+                )
+                return r.status_code in (200, 201)
+        except Exception:
+            return False
+
     def _summarize_checks(self, runs: List[dict]) -> str:
         if not runs:
             return "no_checks"
@@ -184,3 +224,4 @@ parse_push_event = _service.parse_push_event
 fetch_changed_files = _service.fetch_changed_files
 get_ci_status = _service.get_ci_status
 create_pull_request = _service.create_pull_request
+create_commit_status = _service.create_commit_status

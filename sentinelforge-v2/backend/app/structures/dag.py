@@ -4,6 +4,7 @@ Manages async execution of analysis stages with dependency resolution.
 """
 
 import asyncio
+import inspect
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -21,7 +22,7 @@ class StageStatus(str, Enum):
 @dataclass
 class Stage:
     name: str
-    fn: Callable[..., Coroutine]
+    fn: Optional[Callable[..., Coroutine]]
     depends_on: list[str] = field(default_factory=list)
     status: StageStatus = StageStatus.PENDING
     result: Any = None
@@ -40,15 +41,26 @@ class PipelineDAG:
     def __init__(self):
         self.stages: dict[str, Stage] = {}
 
-    def add_stage(self, name: str, fn: Callable, depends_on: list[str] = None):
+    def add_stage(self, name: str, fn: Optional[Callable] = None, depends_on: list[str] = None):
         self.stages[name] = Stage(name=name, fn=fn, depends_on=depends_on or [])
 
     def _ready_stages(self) -> list[str]:
-        """Return names of stages whose dependencies are all complete."""
+        """Return names of stages whose dependencies are all complete, marking unreachable ones as skipped."""
         ready = []
         for name, stage in self.stages.items():
             if stage.status != StageStatus.PENDING:
                 continue
+
+            # If any dependency failed or was skipped, this stage cannot run
+            any_dep_failed = any(
+                self.stages[d].status in (StageStatus.FAILED, StageStatus.SKIPPED)
+                for d in stage.depends_on
+                if d in self.stages
+            )
+            if any_dep_failed:
+                stage.status = StageStatus.SKIPPED
+                continue
+
             deps_done = all(
                 self.stages[d].status == StageStatus.COMPLETE
                 for d in stage.depends_on
@@ -76,7 +88,7 @@ class PipelineDAG:
         Parallel-eligible stages run concurrently.
         """
         results: dict[str, Any] = {}
-        max_iterations = len(self.stages) * 2  # safety guard
+        max_iterations = len(self.stages) * 2 + 1  # safety guard
 
         for _ in range(max_iterations):
             ready = self._ready_stages()
@@ -85,18 +97,28 @@ class PipelineDAG:
                 pending = [s for s in self.stages.values() if s.status == StageStatus.PENDING]
                 if not pending:
                     break
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.01)
                 continue
 
             # Launch all ready stages in parallel
             async def run_stage(name: str):
                 stage = self.stages[name]
+                if stage.fn is None:
+                    stage.status = StageStatus.COMPLETE
+                    results[name] = None
+                    return
+
                 stage.status = StageStatus.RUNNING
                 stage.started_at = time.time()
                 try:
-                    # Build kwargs from completed dependency results
                     dep_results = {d: results[d] for d in stage.depends_on if d in results}
-                    stage.result = await stage.fn(context=context, deps=dep_results)
+                    try:
+                        res = stage.fn(context=context, deps=dep_results)
+                    except TypeError:
+                        res = stage.fn(context)
+                    if inspect.isawaitable(res):
+                        res = await res
+                    stage.result = res
                     results[name] = stage.result
                     stage.status = StageStatus.COMPLETE
                 except Exception as e:
@@ -112,6 +134,9 @@ class PipelineDAG:
             await asyncio.gather(*[run_stage(n) for n in ready])
 
         return results
+
+    # Intuitive alias for execute
+    run = execute
 
 
 def build_sentinelforge_dag() -> PipelineDAG:

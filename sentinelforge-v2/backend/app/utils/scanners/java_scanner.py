@@ -9,5 +9,5 @@ from app.utils.scanners.generic_fallback import scan_generic_regex
 class JavaScanner(BaseScanner):
     """Java source code scanner."""
 
-    def scan(self, code: str) -> ASTReport:
-        return scan_generic_regex(code, "java")
+    def scan(self, code: str, filename: str = "code.java") -> ASTReport:
+        return scan_generic_regex(code, "java", filename=filename)

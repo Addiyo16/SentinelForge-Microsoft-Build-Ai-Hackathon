@@ -9,5 +9,5 @@ from app.utils.scanners.generic_fallback import scan_generic_regex
 class GoScanner(BaseScanner):
     """Go source code scanner."""
 
-    def scan(self, code: str) -> ASTReport:
-        return scan_generic_regex(code, "go")
+    def scan(self, code: str, filename: str = "code.go") -> ASTReport:
+        return scan_generic_regex(code, "go", filename=filename)

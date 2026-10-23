@@ -10,11 +10,17 @@ from typing import Optional, List
 
 @dataclass
 class ASTFinding:
+    rule_id: str
     node_type: str
     description: str
     line: int
     col: int
     severity: str  # critical | high | medium | low | info
+    cwe_id: str = "CWE-Unknown"
+    source_file: str = "code.py"
+    end_line: Optional[int] = None
+    evidence: str = ""
+    explanation: str = ""
     suggestion: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -51,6 +57,6 @@ class BaseScanner(ABC):
     """
 
     @abstractmethod
-    def scan(self, code: str) -> ASTReport:
+    def scan(self, code: str, filename: str = "code.py") -> ASTReport:
         """Scan code content and return an ASTReport."""
         pass

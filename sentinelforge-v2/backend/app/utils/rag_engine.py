@@ -22,6 +22,7 @@ class RAGResult:
     similarity_score: float
     owasp_category: str
     cwe_id: str
+    selection_reason: str = ""
 
     def to_dict(self) -> dict:
         return self.__dict__
@@ -42,6 +43,7 @@ KNOWLEDGE_BASE: List[dict] = [
         "optimized_example": "lookup = {u.id: u for u in users}\nresult = lookup.get(target_id)",
         "owasp": "A05:2021 – Security Misconfiguration",
         "cwe": "CWE-400",
+        "languages": ["python", "javascript", "typescript", "java", "go", "c_cpp", "cpp", "c"],
         "keywords": ["nested loop", "for i in range", "linear search", "O(N²)", "performance", "Map", "Set"],
     },
     {
@@ -55,6 +57,7 @@ KNOWLEDGE_BASE: List[dict] = [
         "optimized_example": 'cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))',
         "owasp": "A03:2021 – Injection",
         "cwe": "CWE-89",
+        "languages": ["python", "javascript", "typescript", "java", "go", "c_cpp", "cpp", "c", "php"],
         "keywords": ["sql", "query", "DROP TABLE", "UNION SELECT", "concat", "injection"],
     },
     {
@@ -68,7 +71,8 @@ KNOWLEDGE_BASE: List[dict] = [
         "optimized_example": "import json\ndata = json.loads(raw_bytes)  # Python safe",
         "owasp": "A08:2021 – Software and Data Integrity Failures",
         "cwe": "CWE-502",
-        "keywords": ["pickle", "deserialization", "marshal", "ObjectInputStream", "readObject", "RCE"],
+        "languages": ["python", "java", "yaml", "ruby"],
+        "keywords": ["pickle", "deserialization", "marshal", "ObjectInputStream", "readObject", "RCE", "yaml.load"],
     },
     {
         "kb_ref": "sec-003",
@@ -81,6 +85,7 @@ KNOWLEDGE_BASE: List[dict] = [
         "optimized_example": "import os\nAPI_KEY = os.environ['MY_SERVICE_API_KEY']",
         "owasp": "A02:2021 – Cryptographic Failures",
         "cwe": "CWE-798",
+        "languages": ["python", "javascript", "typescript", "java", "go", "c_cpp", "cpp", "c", "yaml", "shell"],
         "keywords": ["password", "api_key", "secret", "token", "hardcoded", "credential"],
     },
     {
@@ -94,6 +99,7 @@ KNOWLEDGE_BASE: List[dict] = [
         "optimized_example": 'subprocess.run(["ls", "-la", path], check=True, capture_output=True)  # safe',
         "owasp": "A03:2021 – Injection",
         "cwe": "CWE-78",
+        "languages": ["python", "javascript", "typescript", "java", "go", "c_cpp", "cpp", "c", "shell"],
         "keywords": ["os.system", "exec", "eval", "shell", "subprocess", "child_process", "command injection"],
     },
     {
@@ -107,6 +113,7 @@ KNOWLEDGE_BASE: List[dict] = [
         "optimized_example": "strncpy(dest, src, sizeof(dest) - 1);\ndest[sizeof(dest) - 1] = '\\0'; // safe C",
         "owasp": "A06:2021 – Vulnerable and Outdated Components",
         "cwe": "CWE-120",
+        "languages": ["c_cpp", "cpp", "c"],
         "keywords": ["strcpy", "gets", "sprintf", "buffer overflow", "C++", "memory corruption"],
     },
     {
@@ -120,6 +127,7 @@ KNOWLEDGE_BASE: List[dict] = [
         "optimized_example": "const cleanHTML = DOMPurify.sanitize(userInput);\nreturn <div dangerouslySetInnerHTML={{__html: cleanHTML}} />;",
         "owasp": "A03:2021 – Injection",
         "cwe": "CWE-79",
+        "languages": ["javascript", "typescript", "js", "ts"],
         "keywords": ["dangerouslySetInnerHTML", "XSS", "React", "innerHTML", "script injection"],
     },
     {
@@ -133,7 +141,22 @@ KNOWLEDGE_BASE: List[dict] = [
         "optimized_example": "RUN groupadd -r app && useradd -r -g app appuser\nUSER appuser  # Docker safe",
         "owasp": "A05:2021 – Security Misconfiguration",
         "cwe": "CWE-250",
+        "languages": ["yaml", "yml", "docker", "dockerfile", "shell"],
         "keywords": ["USER root", "Docker", "chmod 777", "permissions", "container", "DevOps"],
+    },
+    {
+        "kb_ref": "sec-008",
+        "vulnerability_type": "Dynamic Python Import Injection",
+        "root_cause": (
+            "Invoking __import__() directly with dynamic or untrusted parameters enables attackers to load "
+            "arbitrary executable Python modules and trigger unintended code execution."
+        ),
+        "historical_fix": "Validate module names against an explicit allowlist and import safely via importlib.import_module() or static imports.",
+        "optimized_example": "import importlib\nALLOWED = {'math', 'json'}\nif mod in ALLOWED: importlib.import_module(mod)",
+        "owasp": "A03:2021 – Injection",
+        "cwe": "CWE-94",
+        "languages": ["python"],
+        "keywords": ["__import__", "importlib", "import injection", "dynamic import", "eval"],
     },
 ]
 
@@ -210,19 +233,66 @@ def _cosine_similarity_tfidf(vec1: Dict[str, float], vec2: Dict[str, float]) -> 
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
-def retrieve_context(code: str, threat_categories: list[str]) -> list[RAGResult]:
+def retrieve_context(
+    code: str,
+    threat_categories: Optional[list[str]] = None,
+    language: Optional[str] = None,
+    finding_cwes: Optional[list[str]] = None,
+) -> list[RAGResult]:
     """
     Retrieve top-3 knowledge base entries relevant to the scanned code.
     Uses TF-IDF Vector Space Model (VSM) cosine similarity over clean tokens.
+    Filters by target language to avoid irrelevant advice (e.g. C gets() for Python).
+    Enforces minimum relevance threshold (0.18) and records selection rationale.
     """
+    if threat_categories is None:
+        threat_categories = []
+    if finding_cwes is None:
+        finding_cwes = []
+
+    # Normalize target language for polyglot filtering
+    target_lang = None
+    if language:
+        l = language.lower().strip()
+        if l in ("py", "python"):
+            target_lang = "python"
+        elif l in ("js", "javascript", "ts", "typescript", "jsx", "tsx"):
+            target_lang = "javascript"
+        elif l in ("java",):
+            target_lang = "java"
+        elif l in ("c", "cpp", "c_cpp", "c++"):
+            target_lang = "c_cpp"
+        elif l in ("go", "golang"):
+            target_lang = "go"
+        elif l in ("yaml", "yml"):
+            target_lang = "yaml"
+        elif l in ("shell", "sh", "bash"):
+            target_lang = "shell"
+        else:
+            target_lang = l
+
     # Create query by combining code contents and matched threat labels
-    query_text = code + " " + " ".join(threat_categories)
+    query_text = code + " " + " ".join(threat_categories) + " " + " ".join(finding_cwes)
     query_tokens = _tokenize(query_text)
     query_vector = _get_tfidf_vector(query_tokens)
 
-    scored: list[tuple[float, dict]] = []
+    scored: list[tuple[float, dict, str]] = []
+    code_lower = code.lower()
 
     for entry in KNOWLEDGE_BASE:
+        # 1. Target language filtering: strictly exclude advice meant for other languages
+        entry_langs = entry.get("languages", [])
+        if target_lang and entry_langs:
+            lang_match = False
+            if target_lang in entry_langs:
+                lang_match = True
+            elif target_lang in ("javascript", "typescript") and any(x in entry_langs for x in ("javascript", "typescript", "js", "ts")):
+                lang_match = True
+            elif target_lang in ("c", "cpp", "c_cpp") and any(x in entry_langs for x in ("c", "cpp", "c_cpp")):
+                lang_match = True
+            if not lang_match:
+                continue  # Skip entries incompatible with target language
+
         kb_text = (
             " ".join(entry["keywords"]) + " " + 
             entry["vulnerability_type"] + " " + 
@@ -234,20 +304,50 @@ def retrieve_context(code: str, threat_categories: list[str]) -> list[RAGResult]
 
         score = _cosine_similarity_tfidf(query_vector, kb_vector)
         
-        # Threat Category Match Boost (increases score if matched category is found)
-        for cat in threat_categories:
-            if cat.lower() in entry["vulnerability_type"].lower() or cat.lower() in " ".join(entry["keywords"]).lower():
-                score += 0.15 # Apply category boost
+        # 2. Check direct keyword matches using regex word boundaries to prevent substring collisions
+        # (e.g. 'gets' must not match inside 'requests.get' or 'widgets')
+        matched_kws = []
+        for kw in entry["keywords"]:
+            kw_clean = kw.strip().lower()
+            if not kw_clean:
+                continue
+            if re.search(r"\b" + re.escape(kw_clean) + r"\b", code_lower):
+                matched_kws.append(kw)
 
-        if score > 0.02:
-            scored.append((score, entry))
+        matched_cats = [
+            cat for cat in threat_categories 
+            if cat.lower() in entry["vulnerability_type"].lower() or cat.lower() in " ".join(entry["keywords"]).lower()
+        ]
+
+        matched_cwes = [
+            cwe for cwe in finding_cwes
+            if cwe.upper() == entry["cwe"].upper()
+        ]
+
+        selection_reason = ""
+        if matched_cwes:
+            score += 0.35  # High-confidence detected CWE match
+            selection_reason = f"Matched detected vulnerability CWE: {', '.join(matched_cwes)}"
+        elif matched_cats:
+            score += 0.25  # High-confidence scanner category boost
+            selection_reason = f"Matched detected threat category: {', '.join(matched_cats)}"
+        elif matched_kws:
+            score += 0.15  # Direct source code keyword match boost
+            selection_reason = f"Source code matched domain keywords: {', '.join(matched_kws)}"
+        elif score >= 0.22:
+            selection_reason = f"TF-IDF semantic relevance (similarity: {score:.2f})"
+
+        # Minimum relevance threshold: 0.18, AND requires either matched keywords/categories or strong TF-IDF score
+        MIN_THRESHOLD = 0.18
+        if score >= MIN_THRESHOLD and selection_reason:
+            scored.append((score, entry, selection_reason))
 
     # Sort results by similarity score descending
     scored.sort(key=lambda x: x[0], reverse=True)
     top_k = scored[:3]
 
     results = []
-    for score, entry in top_k:
+    for score, entry, reason in top_k:
         results.append(
             RAGResult(
                 kb_ref=entry["kb_ref"],
@@ -259,13 +359,19 @@ def retrieve_context(code: str, threat_categories: list[str]) -> list[RAGResult]
                 similarity_score=round(min(max(score, 0.0), 1.0), 4),
                 owasp_category=entry["owasp"],
                 cwe_id=entry["cwe"],
+                selection_reason=reason,
             )
         )
 
     return results
 
 
-async def retrieve_context_azure(code: str, threat_categories: list[str]) -> list[RAGResult]:
+async def retrieve_context_azure(
+    code: str,
+    threat_categories: list[str],
+    language: Optional[str] = None,
+    finding_cwes: Optional[list[str]] = None,
+) -> list[RAGResult]:
     """
     Production path — Azure AI Search semantic retrieval.
     Requires: AZURE_SEARCH_ENDPOINT, AZURE_SEARCH_KEY, AZURE_SEARCH_INDEX in .env
@@ -276,7 +382,7 @@ async def retrieve_context_azure(code: str, threat_categories: list[str]) -> lis
     index = os.getenv("AZURE_SEARCH_INDEX", "sentinelforge-kb")
 
     if not endpoint or not key:
-        return retrieve_context(code, threat_categories)
+        return retrieve_context(code, threat_categories, language=language, finding_cwes=finding_cwes)
 
     try:
         from azure.search.documents import SearchClient
@@ -307,4 +413,4 @@ async def retrieve_context_azure(code: str, threat_categories: list[str]) -> lis
         return results
     except Exception:
         # Graceful fallback to local Vector Space Model
-        return retrieve_context(code, threat_categories)
+        return retrieve_context(code, threat_categories, language=language, finding_cwes=finding_cwes)

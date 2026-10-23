@@ -30,6 +30,8 @@ def get_scanner(lang: str) -> BaseScanner:
         return CppScanner()
     elif l in ("yaml", "yml"):
         return YamlScanner()
+    elif l in ("shell", "sh", "bash", "zsh", "batch"):
+        return CppScanner()
     else:
         # Default fallback is CppScanner which uses generic_fallback
         return CppScanner()

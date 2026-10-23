@@ -1,0 +1,90 @@
+{
+  "version": "2.1.0",
+  "model_type": "LogisticRegression",
+  "feature_schema": [
+    "rule_severity_score",
+    "scanner_confidence",
+    "is_dangerous_api",
+    "has_sanitization",
+    "has_auth_context",
+    "cyclomatic_complexity",
+    "loop_depth",
+    "finding_line",
+    "snippet_length",
+    "evidence_entropy",
+    "language_code"
+  ],
+  "training_samples": 339,
+  "optimal_threshold": 0.4,
+  "metrics": {
+    "selected_model": "LogisticRegression",
+    "test_evaluation": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0,
+      "pr_auc": 1.0,
+      "false_positive_rate": 0.0,
+      "confusion_matrix": {
+        "true_negatives": 52,
+        "false_positives": 0,
+        "false_negatives": 0,
+        "true_positives": 52
+      },
+      "sample_count": 104
+    },
+    "validation_comparison": {
+      "LogisticRegression": {
+        "validation_metrics": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1_score": 1.0,
+          "pr_auc": 1.0,
+          "false_positive_rate": 0.0,
+          "confusion_matrix": {
+            "true_negatives": 60,
+            "false_positives": 0,
+            "false_negatives": 0,
+            "true_positives": 60
+          },
+          "sample_count": 120
+        },
+        "optimal_threshold": 0.4
+      },
+      "RandomForest": {
+        "validation_metrics": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1_score": 1.0,
+          "pr_auc": 1.0,
+          "false_positive_rate": 0.0,
+          "confusion_matrix": {
+            "true_negatives": 60,
+            "false_positives": 0,
+            "false_negatives": 0,
+            "true_positives": 60
+          },
+          "sample_count": 120
+        },
+        "optimal_threshold": 0.4
+      },
+      "HistGradientBoosting": {
+        "validation_metrics": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1_score": 1.0,
+          "pr_auc": 1.0,
+          "false_positive_rate": 0.0,
+          "confusion_matrix": {
+            "true_negatives": 60,
+            "false_positives": 0,
+            "false_negatives": 0,
+            "true_positives": 60
+          },
+          "sample_count": 120
+        },
+        "optimal_threshold": 0.4
+      }
+    }
+  },
+  "trained_at": "2026-10-23T05:52:33.406954+00:00"
+}
